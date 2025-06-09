@@ -1,31 +1,36 @@
-// #ifndef ARM_CONTROLLER_H
-// #define ARM_CONTROLLER_H
+#ifndef ARM_CONTROLLER_H
+#define ARM_CONTROLLER_H
 
-// #include <vector>
-// #include <memory>
+#include <string>
+#include <vector>
+#include <memory>
+#include "CodroidApi/CodroidApi.h"
 
-// // 前向声明
-// class SDK;
+class ArmController {
+public:
+    ArmController(const std::string& ip = "192.168.101.100", const std::string& port = "9000");
+    ~ArmController();
 
-// class ArmController {
-// public:
-//     explicit ArmController(std::shared_ptr<SDK> sdk);
-    
-//     // 移动机械臂到初始位置
-//     bool moveToHome();
-    
-//     // 控制夹爪
-//     bool openGripper();
-//     bool closeGripper();
-    
-//     // 执行轨迹
-//     bool executeTrajectory(const std::vector<std::vector<double>>& pathPoints);
-    
-//     // 规划安全路径
-//     std::vector<std::vector<double>> planSafePath(const std::vector<double>& targetPose);
+    // 基础控制接口
+    bool connect();
+    bool disconnect();
+    bool isConnected() const;
 
-// private:
-//     std::shared_ptr<SDK> sdk_;  // SDK接口对象
-// };
+    // 夹爪控制接
+    bool openGripper(int port = 1);  // 打开夹爪，默认使用端口1
+    bool closeGripper(int port = 1); // 关闭夹爪，默认使用端口1
+    bool isGripperOpen(int port = 1) const; // 检查夹爪状态
 
-// #endif // ARM_CONTROLLER_H
+    bool executeTrajectory(const MovCartSegments& segments);
+
+    // Home position control
+    bool setHomePosition(const std::vector<double>& position);  // Set home position with joint angles
+    bool goHome(double speed = 60, double acc = 80);  // Move to home position
+    MovCartSegments createHomeTrajectory(double speed = 60, double acc = 80);  // Create trajectory to home position
+
+private:
+    std::unique_ptr<c2::CodroidApi> api_;
+    bool connected_;
+};
+
+#endif // ARM_CONTROLLER_H
