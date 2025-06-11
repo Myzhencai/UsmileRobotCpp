@@ -1,4 +1,5 @@
 #include "ArmController.h"
+#include "Define.h"
 #include <iostream>
 
 /**
@@ -7,7 +8,7 @@
  * @param port 机器人端口号，默认为"9000"
  */
 ArmController::ArmController(const std::string& ip, const std::string& port) {
-    api_ = std::make_unique<c2::CodroidApi>();
+    api_ = std::make_unique<c2::CodroidApi>(ip, port);
     connected_ = false;
 }
 
@@ -21,21 +22,40 @@ ArmController::~ArmController() {
 }
 
 /**
- * @brief 连接到机器人
+ * @brief 连接到机器人（检测是否正常）
  * @return 连接是否成功
  */
-bool ArmController::connect() {
+bool ArmController::isconnected() {
     if (!api_) {
         std::cerr << "api_ is not initialized." << std::endl;
         return false;
     }
-    auto res = api_->connect();
-    connected_ = (res.code == c2::ResponseCode::Success);
-    return connected_;
+    
+    // 获取机器人状态
+    auto res = api_->getRobotState();
+    if (res.code != c2::ResponseCode::OK) {
+        std::cerr << "Failed to get robot state: " << res.msg << std::endl;
+        return false;
+    }
+
+    // 检查机器人状态是否为Ready或Auto模式
+    int state = res.data;
+    if (state != static_cast<int>(c2::RobotState::Ready) && 
+        state != static_cast<int>(c2::RobotState::Auto)) {
+        // 尝试切换到Ready模式
+        res = api_->sendUserCommand(c2::UserCommand::ToReady);
+        if (res.code != c2::ResponseCode::OK) {
+            std::cerr << "Failed to switch to Ready mode: " << res.msg << std::endl;
+            return false;
+        }
+    }
+
+    connected_ = true;
+    return true;
 }
 
 /**
- * @brief 断开与机器人的连接
+ * @brief 断开与机器人的连接（断电）
  * @return 断开连接是否成功
  */
 bool ArmController::disconnect() {
@@ -43,20 +63,28 @@ bool ArmController::disconnect() {
         std::cerr << "api_ is not initialized." << std::endl;
         return false;
     }
-    auto res = api_->disconnect();
+    auto res = api_->sendUserCommand(c2::UserCommand::SwitchOff);
+    if (res.code != c2::ResponseCode::OK) {
+        std::cerr << "Failed to switch off robot: " << res.msg << std::endl;
+        return false;
+    }
+    
+    // 检查机器人状态是否为StandBy
+    res = api_->getRobotState();
+    if (res.code != c2::ResponseCode::OK) {
+        std::cerr << "Failed to get robot state: " << res.msg << std::endl;
+        return false;
+    }
+    
+    int state = res.data;
+    if (state != static_cast<int>(c2::RobotState::StandBy)) {
+        std::cerr << "Robot did not enter StandBy state after switch off" << std::endl;
+        return false;
+    }
+    
     connected_ = false;
-    return res.code == c2::ResponseCode::Success;
+    return true;
 }
-
-/**
- * @brief 检查是否已连接到机器人
- * @return 连接状态
- */
-bool ArmController::isConnected() const {
-    return connected_;
-}
-
-
 
 /**
  * @brief 打开夹爪
@@ -70,7 +98,7 @@ bool ArmController::openGripper(int port) {
     }
     
     auto res = api_->setDO(port, 1); // 设置数字输出为高电平，打开夹爪
-    return res.code == c2::ResponseCode::Success;
+    return res.code == c2::ResponseCode::OK;
 }
 
 /**
@@ -85,7 +113,7 @@ bool ArmController::closeGripper(int port) {
     }
     
     auto res = api_->setDO(port, 0); // 设置数字输出为低电平，关闭夹爪
-    return res.code == c2::ResponseCode::Success;
+    return res.code == c2::ResponseCode::OK;
 }
 
 /**
@@ -100,24 +128,25 @@ bool ArmController::isGripperOpen(int port) const {
     }
     
     auto res = api_->getDI(port); // 读取数字输入状态
-    if (res.code == c2::ResponseCode::Success) {
+    if (res.code == c2::ResponseCode::OK) {
         return res.data.get<int>() == 1; // 如果输入为高电平，则夹爪处于打开状态
     }
     return false;
 }
+
 
 /**
  * @brief 执行笛卡尔轨迹段
  * @param segments 需要执行的笛卡尔轨迹段集合
  * @return 操作是否成功
  */
-bool ArmController::executeTrajectory(const MovCartSegments& segments) {
+bool ArmController::executeTrajectory(const c2::MovCartSegments& segments) {
     if (!api_) {
         std::cerr << "api_ is not initialized." << std::endl;
         return false;
     }
     auto res = api_->movCartSegments(segments);
-    if (res.code != c2::ResponseCode::Success) {
+    if (res.code != c2::ResponseCode::OK) {
         std::cout << "[执行中断] movCartSegments 执行失败: " << res.msg << std::endl;
         return false;
     }
@@ -169,77 +198,89 @@ bool ArmController::goHome(double speed, double acc) {
 
     // 调用API的goHome方法
     auto res = api_->goHome(speed, acc);
-    if (res.code != c2::ResponseCode::Success) {
+    if (res.code != c2::ResponseCode::OK) {
         std::cout << "[执行中断] goHome 执行失败: " << res.msg << std::endl;
         return false;
     }
     return true;
 }
 
-/**
- * @brief 创建一条回到Home（打包）位的轨迹段
- * 
- * 该函数用于生成一条机器人回到Home（打包）位的轨迹。首先尝试从API获取当前设置的打包位（Home位）关节角度，
- * 如果获取失败，则使用默认的Home位关节角度（[0, 0, 90, 0, 90, 0]）。然后将该点作为目标点，构造一个
- * MovL（直线插补）类型的轨迹段，设置速度、加速度和过渡区类型，最后将该轨迹段加入到轨迹集合中并返回。
- * 
- * @param speed 运动速度（关节空间）
- * @param acc 运动加速度（关节空间）
- * @return MovCartSegments 包含一条回Home位的轨迹段集合
- */
-MovCartSegments ArmController::createHomeTrajectory(double speed, double acc) {
-    MovCartSegments segments; // 轨迹段集合
-    Point point;              // 目标点
-    point.type = PointType::Joint; // 目标点类型为关节空间
+// /**
+//  * @brief 创建一条回到Home（打包）位的轨迹段
+//  * 
+//  * 该函数用于生成一条机器人回到Home（打包）位的轨迹。首先尝试从API获取当前设置的打包位（Home位）关节角度，
+//  * 如果获取失败，则使用默认的Home位关节角度（[0, 0, 90, 0, 90, 0]）。然后将该点作为目标点，构造一个
+//  * MovL（直线插补）类型的轨迹段，设置速度、加速度和过渡区类型，最后将该轨迹段加入到轨迹集合中并返回。
+//  * 
+//  * @param speed 运动速度（关节空间）
+//  * @param acc 运动加速度（关节空间）
+//  * @return MovCartSegments 包含一条回Home位的轨迹段集合
+//  */
+// MovCartSegments ArmController::createHomeTrajectory(double speed, double acc) {
+//     c2::MovCartSegments segments; // 轨迹段集合
+//     c2::Point point;              // 目标点
+//     point.type = c2::PointType::Joint; // 目标点类型为关节空间
 
-    // 先把packposition设置为homeposition的位置
-    // 获取当前home position
-    auto resHome = api_->getHomePosition();
-    double homePos[6] = {0, 0, 90, 0, 90, 0};
-    if (resHome.code == c2::ResponseCode::Success) {
-        auto posVec = resHome.data.get<std::vector<double>>();
-        for (int i = 0; i < 6; i++) {
-            homePos[i] = posVec[i];
-        }
-    }
-    api_->setPackPosition(homePos);
+//     // 先把packposition设置为homeposition的位置
+//     // 获取当前home position
+//     auto resHome = api_->getHomePosition();
+//     double homePos[6] = {0, 0, 90, 0, 90, 0};
+//     if (resHome.code == c2::ResponseCode::OK) {
+//         auto posVec = resHome.data.get<std::vector<double>>();
+//         for (int i = 0; i < 6; i++) {
+//             homePos[i] = posVec[i];
+//         }
+//     }
+//     api_->setPackPosition(homePos);
 
-    // 尝试获取当前设置的打包位（Home位）关节角度
-    auto res = api_->getPackPosition();
-    if (res.code == c2::ResponseCode::Success) {
-        // 获取成功，使用返回的关节角度
-        auto posVec = res.data.get<std::vector<double>>();
-        for (int i = 0; i < 6; i++) {
-            point.apos.jntPos[i] = posVec[i];
-        }
-    } else {
-        // 获取失败，使用默认的Home位关节角度
-        point.apos.jntPos[0] = 0;
-        point.apos.jntPos[1] = 0;
-        point.apos.jntPos[2] = 90;
-        point.apos.jntPos[3] = 0;
-        point.apos.jntPos[4] = 90;
-        point.apos.jntPos[5] = 0;
-    }
+//     // 尝试获取当前设置的打包位（Home位）关节角度
+//     auto res = api_->getPackPosition();
+//     if (res.code == c2::ResponseCode::OK) {
+//         // 获取成功，使用返回的关节角度
+//         auto posVec = res.data.get<std::vector<double>>();
+//         for (int i = 0; i < 6; i++) {
+//             point.apos.jntPos[i] = posVec[i];
+//         }
+//     } else {
+//         // 获取失败，使用默认的Home位关节角度
+//         point.apos.jntPos[0] = 0;
+//         point.apos.jntPos[1] = 0;
+//         point.apos.jntPos[2] = 90;
+//         point.apos.jntPos[3] = 0;
+//         point.apos.jntPos[4] = 90;
+//         point.apos.jntPos[5] = 0;
+//     }
 
 
-    // 这里需要添加路径规划的内容修改
-    // 构造一个轨迹段，类型为MovL（直线插补），目标点为Home位
-    MovCartSegment segment;
-    segment.type = MovType::MovL;           // 运动类型：直线插补
-    segment.targetPosition = point;         // 目标点
-    segment.speed.joint = speed;            // 关节速度
-    segment.acc.joint = acc;                // 关节加速度
-    segment.zoneType = ZoneType::Fine;      // 过渡区类型：精确停止
-    segment.zone.per = 0;                   // 过渡区参数
-    segment.zone.dis = 0;                   // 过渡区参数
+//     // 这里需要添加路径规划的内容修改
+//     // 构造一个轨迹段，类型为MovL（直线插补），目标点为Home位
+//     c2::MovCartSegments segment;
+//     segment.type = c2::MovType::MovL;           // 运动类型：直线插补
+//     segment.targetPosition = point;         // 目标点
+//     segment.speed.joint = speed;            // 关节速度
+//     segment.acc.joint = acc;                // 关节加速度
+//     segment.zoneType = c2::ZoneType::Fine;      // 过渡区类型：精确停止
+//     segment.zone.per = 0;                   // 过渡区参数
+//     segment.zone.dis = 0;                   // 过渡区参数
 
-    // 将轨迹段加入集合
-    segments.segments.push_back(segment);
-    return segments;
-}
+//     // 将轨迹段加入集合
+//     segments.segments.push_back(segment);
+//     return segments;
+// }
 
 // std::vector<std::vector<double>> ArmController::planSafePath(const std::vector<double>& targetPose) {
 //     // 伪代码：实际应接入 RRT*/A* 等避障算法
 //     return {targetPose};
 // }
+
+int main(int argc, char** argv) {
+
+    const std::string ip = "192.168.101.100";
+    const std::string port="9000";
+
+    ArmController arm_controller(ip,port);
+
+
+    return 0;
+}
+

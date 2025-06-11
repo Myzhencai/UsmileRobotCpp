@@ -4,7 +4,9 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "CodroidApi/CodroidApi.h"
+#include "CodroidApi.h"
+#include "Define.h"
+
 
 class ArmController {
 public:
@@ -12,21 +14,20 @@ public:
     ~ArmController();
 
     // 基础控制接口
-    bool connect();
+    bool isconnected();
     bool disconnect();
-    bool isConnected() const;
 
     // 夹爪控制接
     bool openGripper(int port = 1);  // 打开夹爪，默认使用端口1
     bool closeGripper(int port = 1); // 关闭夹爪，默认使用端口1
     bool isGripperOpen(int port = 1) const; // 检查夹爪状态
 
-    bool executeTrajectory(const MovCartSegments& segments);
+    bool executeTrajectory(const c2::MovCartSegments& segments);
 
     // Home position control
     bool setHomePosition(const std::vector<double>& position);  // Set home position with joint angles
     bool goHome(double speed = 60, double acc = 80);  // Move to home position
-    MovCartSegments createHomeTrajectory(double speed = 60, double acc = 80);  // Create trajectory to home position
+    // MovCartSegments createHomeTrajectory(double speed = 60, double acc = 80);  // Create trajectory to home position
 
 private:
     std::unique_ptr<c2::CodroidApi> api_;
