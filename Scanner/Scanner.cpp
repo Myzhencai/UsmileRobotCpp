@@ -199,18 +199,14 @@ bool Scanner::load_pointcloud(const std::string& filename) {
  * @return 是否成功进入扫描模式
  */
 bool Scanner::enter_scan_mode() {
+    // 检查扫描仪是否已初始化
     if (!is_initialized_) {
         std::cout << "[错误] 扫描仪未初始化" << std::endl;
         return false;
     }
 
-    if (!TJST3DEnterScanMode()) {
-        std::cout << "[错误] 进入扫描模式失败" << std::endl;
-        return false;
-    }
-
-    std::cout << "[信息] 成功进入扫描模式" << std::endl;
-    return true;
+    // 进入扫描模式
+    return TJST3DEnterScanMode();
 }
 
 /**
@@ -219,21 +215,18 @@ bool Scanner::enter_scan_mode() {
  * @return 是否成功显示点云
  */
 bool Scanner::show_pointcloud(sn3DCore::sn3DRangeData* pointcloud) {
+    // 检查扫描仪是否已初始化
+    if (!is_initialized_) {
+        std::cout << "[错误] 扫描仪未初始化" << std::endl;
+        return false;
+    }
+
     if (!pointcloud) {
-        std::cout << "[错误] 点云数据为空" << std::endl;
+        std::cout << "[错误] 要显示的点云为空" << std::endl;
         return false;
     }
 
-    // 显示点云
-    bool success = TJST3DShowPoint(pointcloud);
-
-    if (!success) {
-        std::cout << "[错误] 显示点云失败" << std::endl;
-        return false;
-    }
-
-    std::cout << "[信息] 点云显示成功" << std::endl;
-    return true;
+    return TJST3DShowPoint(pointcloud);
 }
 
 /**
@@ -241,6 +234,7 @@ bool Scanner::show_pointcloud(sn3DCore::sn3DRangeData* pointcloud) {
  * @return 是否成功扫描
  */
 bool Scanner::scan_single_pointcloud() {
+    // 检查扫描仪是否已初始化
     if (!is_initialized_) {
         std::cout << "[错误] 扫描仪未初始化" << std::endl;
         return false;
@@ -309,12 +303,72 @@ bool Scanner::merge_scanned_pointclouds(const std::string& output_file) {
  * @brief 清除所有已扫描的点云
  */
 void Scanner::clear_scanned_pointclouds() {
-    // 清理所有点云数据
-    for (auto* cloud : scanned_pointclouds_) {
-        if (cloud) {
-            TJST3DRangeDelete(cloud);
-        }
+    for (auto& pointcloud : scanned_pointclouds_) {
+        TJST3DRangeDelete(pointcloud);
     }
     scanned_pointclouds_.clear();
-    std::cout << "[信息] 已清除所有扫描的点云数据" << std::endl;
+    std::cout << "[信息] 已清除所有已扫描点云" << std::endl;
+}
+
+/**
+ * @brief 抓取图片
+ * @param left_image_filename 左相机图片保存文件名（可选）
+ * @param right_image_filename 右相机图片保存文件名（可选）
+ * @param bRGB 是否抓取彩色图，默认为true
+ * @return 抓取是否成功
+ */
+bool Scanner::capture_image(const std::string& left_image_filename, const std::string& right_image_filename, bool bRGB) {
+    if (!is_initialized_) {
+        std::cout << "[错误] 扫描仪未初始化" << std::endl;
+        return false;
+    }
+
+    int width = 1920, height = 1080, bitCount = 24;
+    if (!TJST3DGetImageFormat(&width, &height, &bitCount)) {
+        std::cout << "[错误] 无法获取图像格式" << std::endl;
+        return false;
+    }
+
+    // 计算图像缓冲区大小
+    unsigned int image_buffer_size = width * height * (bitCount / 8);
+    unsigned char* left_image_buffer = new (std::nothrow) unsigned char[image_buffer_size];
+    unsigned char* right_image_buffer = new (std::nothrow) unsigned char[image_buffer_size];
+
+    if (!left_image_buffer || !right_image_buffer) {
+        std::cout << "[错误] 内存分配失败" << std::endl;
+        delete[] left_image_buffer;
+        delete[] right_image_buffer;
+        return false;
+    }
+
+    unsigned int caught_size = TJST3DCatchImageEx(left_image_buffer, right_image_buffer, image_buffer_size, bRGB);
+    if (caught_size == 0) {
+        std::cout << "[错误] 抓取图片失败" << std::endl;
+        delete[] left_image_buffer;
+        delete[] right_image_buffer;
+        return false;
+    }
+
+    bool success = true;
+    if (!left_image_filename.empty()) {
+        if (!TJST3DSaveBmpImageA(left_image_filename.c_str(), left_image_buffer, bitCount)) {
+            std::cout << "[错误] 保存左相机图片失败: " << left_image_filename << std::endl;
+            success = false;
+        } else {
+            std::cout << "[信息] 左相机图片已保存到: " << left_image_filename << std::endl;
+        }
+    }
+
+    if (!right_image_filename.empty()) {
+        if (!TJST3DSaveBmpImageA(right_image_filename.c_str(), right_image_buffer, bitCount)) {
+            std::cout << "[错误] 保存右相机图片失败: " << right_image_filename << std::endl;
+            success = false;
+        } else {
+            std::cout << "[信息] 右相机图片已保存到: " << right_image_filename << std::endl;
+        }
+    }
+
+    delete[] left_image_buffer;
+    delete[] right_image_buffer;
+    return success;
 } 

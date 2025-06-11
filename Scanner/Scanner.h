@@ -109,7 +109,14 @@ public:
      */
     void clear_scanned_pointclouds();
 
-   
+    /**
+     * @brief 抓取图片
+     * @param left_image_filename 左相机图片保存文件名（可选）
+     * @param right_image_filename 右相机图片保存文件名（可选）
+     * @param bRGB 是否抓取彩色图，默认为true
+     * @return 抓取是否成功
+     */
+    bool capture_image(const std::string& left_image_filename = "", const std::string& right_image_filename = "", bool bRGB = true);
 
 private:
     bool is_initialized_;                      ///< 扫描仪是否已初始化
