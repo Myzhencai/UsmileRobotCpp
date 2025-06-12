@@ -12,9 +12,11 @@ class ForceMonitor {
 public:
     /**
      * @brief 构造函数
-     * @param forceSensor 力传感器控制器的智能指针
+     * @param forcemode 力传感器工作模式
+     * @param forcelimit 力阈值限制值
+     * @note 初始化力传感器监控器，设置工作模式和力阈值
      */
-    ForceMonitor(std::shared_ptr<kw::SensorControl> forceSensor);
+    ForceMonitor(int forcemode, double forcelimit);
 
     /**
      * @brief 读取当前力传感器数据
@@ -37,5 +39,6 @@ public:
 
 private:
     std::shared_ptr<kw::SensorControl> sensor;    ///< 力传感器控制器
-    double forceThreshold;                        ///< 力阈值，用于判断是否过载
+    double forceThreshold;      
+    int mode = 0;                  ///< 力阈值，用于判断是否过载
 }; 
