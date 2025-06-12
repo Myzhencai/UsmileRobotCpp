@@ -4,7 +4,11 @@
 #include <vector>
 #include <string>
 #include <array>
+#include "TJST3DScannerApiSDK/Include/point3.h"
+#include "TJST3DScannerApiSDK/Include/MatrixData.h"
+#include "TJST3DScannerApiSDK/Include/RangeData.h"
 #include "TJST3DScannerApi.h"
+
 
 /**
  * @brief 扫描仪类，用于控制3D扫描仪硬件和处理点云数据
@@ -34,17 +38,17 @@ public:
      */
     void uninitialize();
 
-     /**
-     * @brief 根据给定的平移和旋转对点云进行变换
-     * @param pointcloud 输入点云数据
-     * @param translation 平移向量 (x, y, z)
-     * @param rotation 旋转欧拉角 (rx, ry, rz)
-     * @return 变换后的点云数据
-     */
-    sn3DCore::sn3DRangeData* transform_pointcloud(
-        sn3DCore::sn3DRangeData* pointcloud,
-        const std::array<double, 3>& translation,
-        const std::array<double, 3>& rotation);
+    //  /**
+    //  * @brief 根据给定的平移和旋转对点云进行变换
+    //  * @param pointcloud 输入点云数据
+    //  * @param translation 平移向量 (x, y, z)
+    //  * @param rotation 旋转欧拉角 (rx, ry, rz)
+    //  * @return 变换后的点云数据
+    //  */
+    // sn3DCore::sn3DRangeData* transform_pointcloud(
+    //     sn3DCore::sn3DRangeData* pointcloud,
+    //     const std::array<double, 3>& translation,
+    //     const std::array<double, 3>& rotation);
 
 
     /**
