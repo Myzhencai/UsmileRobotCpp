@@ -33,7 +33,7 @@ bool ArmController::isconnected() {
     
     // 获取机器人状态
     auto res = api_->getRobotState();
-    if (res.code != c2::ResponseCode::OK) {
+    if (res.data != 0) {
         std::cerr << "Failed to get robot state: " << res.msg << std::endl;
         return false;
     }
