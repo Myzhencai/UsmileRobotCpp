@@ -1,6 +1,14 @@
 #include "ArmController.h"
 #include "Define.h"
 #include <iostream>
+#include <yaml-cpp/yaml.h>
+#include <cmath>
+#include <open3d/Open3D.h>
+#include <Eigen/Dense>
+
+// 将弧度转为角度
+constexpr double RAD2DEG = 180.0 / M_PI;
+
 
 /**
  * @brief 构造函数，初始化机器人控制器
@@ -140,14 +148,14 @@ bool ArmController::isGripperOpen(int port) const {
  * @param segments 需要执行的笛卡尔轨迹段集合
  * @return 操作是否成功
  */
-bool ArmController::executeTrajectory(const c2::MovCartSegments& segments) {
+bool ArmController::executeTrajectory(const c2::MovJointSegments& segments) {
     if (!api_) {
         std::cerr << "api_ is not initialized." << std::endl;
         return false;
     }
-    auto res = api_->movCartSegments(segments);
+    auto res = api_->movJointSegments(segments);
     if (res.code != c2::ResponseCode::OK) {
-        std::cout << "[执行中断] movCartSegments 执行失败: " << res.msg << std::endl;
+        std::cout << "[执行中断] movJointSegments 执行失败: " << res.msg << std::endl;
         return false;
     }
     return true;
@@ -180,98 +188,180 @@ bool ArmController::setHomePosition(const std::vector<double>& position) {
     return true;
 }
 
+
 /**
- * @brief 让机械臂回到Home位置
- * 
- * 调用底层API的goHome方法，使机械臂以指定的速度和加速度运动到Home位置。
- * 
- * @param speed 运动速度（单位：度/秒），默认为60
- * @param acc 运动加速度（单位：度/秒^2），默认为80
- * @return 操作是否成功，true表示成功，false表示失败
+ * @brief 解析yaml文件，生成关节空间轨迹（MovJointSegments）
+ *
+ * 该函数从指定的yaml文件中读取关节角度点（Points），
+ * 并将其转换为MovJointSegments结构体，用于机械臂的关节空间运动轨迹规划。
+ *
+ * @param yaml_path yaml文件路径，文件中应包含"Points"字段，每个点为6维关节角度
+ * @param speed 关节运动速度（单位：度/秒），默认为60
+ * @param acc 关节运动加速度（单位：度/秒^2），默认为80
+ * @return 生成的MovJointSegments轨迹段集合
  */
-bool ArmController::goHome(double speed, double acc) {
-    // 检查api_是否已初始化
+c2::MovJointSegments ArmController::parseYamlToMovJointSegments(const std::string& yaml_path, double speed = 60, double acc = 80) {
+    c2::MovJointSegments segments;
+    try {
+        YAML::Node root = YAML::LoadFile(yaml_path);
+        YAML::Node points = root["Points"];
+        if (!points || !points.IsSequence()) {
+            std::cerr << "Invalid or missing 'Points' section in YAML." << std::endl;
+            return segments;
+        }
+        for (const auto& point : points) {
+            if (point["apos"] && point["apos"].IsSequence() && point["apos"].size() == 6) {
+                c2::Point p;
+                p.type = c2::PointType::Joint;
+                for (size_t i = 0; i < 6; ++i) {
+                    // 是否需要切换单位存疑需要和那边确认（需要换算成角度）
+                    p.apos.jntPos[i] = point["apos"][i].as<double>() * RAD2DEG;
+                }
+                c2::Speed s; s.joint = speed;
+                c2::Acc a; a.joint = acc;
+                c2::Zone z; z.per = 50; z.dis = 60;
+                segments.AddMovJ(p, s, a, c2::ZoneType::Relative, z);
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error loading YAML: " << e.what() << std::endl;
+    }
+    return segments;
+}
+
+
+/**
+ * @brief 根据点云和法向量生成笛卡尔空间轨迹（MovCartSegments）(先试用python仿真)
+ *
+ * 该函数根据给定的点云和法向量，生成笛卡尔空间的运动轨迹。
+ * speed和acc参数现在应为c2::Speed和c2::Acc类型，允许分别设置各分量。
+ * 它首先遍历指定的点索引（ids），对于每个点，计算其扩展后的新位置，
+ * 然后构造一个MovL（直线插补）类型的轨迹段，并添加到轨迹集合中。
+ */
+c2::MovCartSegments ArmController::createCartTrajectoryFromPointCloud(
+    const open3d::geometry::PointCloud& cloud,
+    const std::vector<int>& ids,
+    const c2::Speed& speed,
+    const c2::Acc& acc,
+    double extend_dist
+) {
+    c2::MovCartSegments traj;
+    c2::Zone z; z.per = 0; z.dis = 0;
+    for (int idx : ids) {
+        if (idx < 0 || idx >= static_cast<int>(cloud.points_.size()) || idx >= static_cast<int>(cloud.normals_.size())) continue;
+        const auto& pt = cloud.points_[idx];
+        const auto& n = cloud.normals_[idx];
+        Eigen::Vector3d new_pt = pt + n.normalized() * extend_dist;
+        c2::Point cpos;
+        cpos.type = c2::PointType::Cart;
+        cpos.cpos.x = new_pt.x();
+        cpos.cpos.y = new_pt.y();
+        cpos.cpos.z = new_pt.z();
+
+        // 计算姿态：法向量与xyz坐标系的旋转角(需要根据python仿真)
+        // 假设工具z轴对准法向量，x轴在xy平面投影指向x正方向
+        Eigen::Vector3d z_axis = n.normalized();
+        Eigen::Vector3d x_ref(1, 0, 0);
+        Eigen::Vector3d y_axis = z_axis.cross(x_ref);
+        if (y_axis.norm() < 1e-6) {
+            // 法向量接近x轴，选择y轴为参考
+            x_ref = Eigen::Vector3d(0, 1, 0);
+            y_axis = z_axis.cross(x_ref);
+        }
+        y_axis.normalize();
+        Eigen::Vector3d x_axis = y_axis.cross(z_axis);
+        x_axis.normalize();
+
+        // 构造旋转矩阵
+        Eigen::Matrix3d rot;
+        rot.col(0) = x_axis;
+        rot.col(1) = y_axis;
+        rot.col(2) = z_axis;
+
+        // 提取欧拉角（ZYX顺序，单位为弧度）
+        Eigen::Vector3d euler = rot.eulerAngles(2, 1, 0); // ZYX
+        cpos.cpos.a = euler[2]; // X
+        cpos.cpos.b = euler[1]; // Y
+        cpos.cpos.c = euler[0]; // Z
+
+        traj.AddMovL(cpos, speed, acc, c2::ZoneType::Fine, z);
+    }
+    return traj;
+}
+
+bool ArmController::StartBrushTeethTrajectory(const c2::MovCartSegments& traj) {
     if (!api_) {
         std::cerr << "api_ is not initialized." << std::endl;
         return false;
     }
-
-    // 调用API的goHome方法
-    auto res = api_->goHome(speed, acc);
+    auto res = api_->movCartSegments(traj);
     if (res.code != c2::ResponseCode::OK) {
-        std::cout << "[执行中断] goHome 执行失败: " << res.msg << std::endl;
+        std::cerr << "[执行中断] movCartSegments 执行失败: " << res.msg << std::endl;
         return false;
     }
     return true;
 }
 
-// /**
-//  * @brief 创建一条回到Home（打包）位的轨迹段
-//  * 
-//  * 该函数用于生成一条机器人回到Home（打包）位的轨迹。首先尝试从API获取当前设置的打包位（Home位）关节角度，
-//  * 如果获取失败，则使用默认的Home位关节角度（[0, 0, 90, 0, 90, 0]）。然后将该点作为目标点，构造一个
-//  * MovL（直线插补）类型的轨迹段，设置速度、加速度和过渡区类型，最后将该轨迹段加入到轨迹集合中并返回。
-//  * 
-//  * @param speed 运动速度（关节空间）
-//  * @param acc 运动加速度（关节空间）
-//  * @return MovCartSegments 包含一条回Home位的轨迹段集合
-//  */
-// MovCartSegments ArmController::createHomeTrajectory(double speed, double acc) {
-//     c2::MovCartSegments segments; // 轨迹段集合
-//     c2::Point point;              // 目标点
-//     point.type = c2::PointType::Joint; // 目标点类型为关节空间
+/**
+ * @brief 执行指定的project
+ * @param projectName 工程名称
+ * @param taskName 任务名称（可选）
+ * @return true表示执行成功，false表示失败
+ */
+bool ArmController::runProject(const std::string& projectName, const std::string& taskName) {
+    if (!api_) return false;
+    auto res = api_->runProject(projectName, taskName);
+    if (res.code != c2::ResponseCode::OK) {
+        std::cerr << "runProject failed: " << res.msg << std::endl;
+        return false;
+    }
+    return true;
+}
 
-//     // 先把packposition设置为homeposition的位置
-//     // 获取当前home position
-//     auto resHome = api_->getHomePosition();
-//     double homePos[6] = {0, 0, 90, 0, 90, 0};
-//     if (resHome.code == c2::ResponseCode::OK) {
-//         auto posVec = resHome.data.get<std::vector<double>>();
-//         for (int i = 0; i < 6; i++) {
-//             homePos[i] = posVec[i];
-//         }
-//     }
-//     api_->setPackPosition(homePos);
+/**
+ * @brief 获取当前机械臂状态
+ * @return 状态码（参考c2::RobotState），失败返回-1
+ */
+int ArmController::getRobotState() {
+    if (!api_) return -1;
+    auto res = api_->getRobotState();
+    if (res.code != c2::ResponseCode::OK) {
+        std::cerr << "getRobotState failed: " << res.msg << std::endl;
+        return -1;
+    }
+    return res.data.get<int>();
+}
 
-//     // 尝试获取当前设置的打包位（Home位）关节角度
-//     auto res = api_->getPackPosition();
-//     if (res.code == c2::ResponseCode::OK) {
-//         // 获取成功，使用返回的关节角度
-//         auto posVec = res.data.get<std::vector<double>>();
-//         for (int i = 0; i < 6; i++) {
-//             point.apos.jntPos[i] = posVec[i];
-//         }
-//     } else {
-//         // 获取失败，使用默认的Home位关节角度
-//         point.apos.jntPos[0] = 0;
-//         point.apos.jntPos[1] = 0;
-//         point.apos.jntPos[2] = 90;
-//         point.apos.jntPos[3] = 0;
-//         point.apos.jntPos[4] = 90;
-//         point.apos.jntPos[5] = 0;
-//     }
+/**
+ * @brief 获取当前机械臂末端的笛卡尔坐标系位姿
+ * @param out_pose 输出参数，返回位姿（c2::CPos）
+ * @return true表示获取成功，false表示失败
+ */
+bool ArmController::getCartPosition(c2::CPos& out_pose) {
+    if (!api_) return false;
+    auto res = api_->getCartPosition();
+    if (res.code != c2::ResponseCode::OK) {
+        std::cerr << "getCartPosition failed: " << res.msg << std::endl;
+        return false;
+    }
+    out_pose = res.data.get<c2::CPos>();
+    return true;
+}
 
-
-//     // 这里需要添加路径规划的内容修改
-//     // 构造一个轨迹段，类型为MovL（直线插补），目标点为Home位
-//     c2::MovCartSegments segment;
-//     segment.type = c2::MovType::MovL;           // 运动类型：直线插补
-//     segment.targetPosition = point;         // 目标点
-//     segment.speed.joint = speed;            // 关节速度
-//     segment.acc.joint = acc;                // 关节加速度
-//     segment.zoneType = c2::ZoneType::Fine;      // 过渡区类型：精确停止
-//     segment.zone.per = 0;                   // 过渡区参数
-//     segment.zone.dis = 0;                   // 过渡区参数
-
-//     // 将轨迹段加入集合
-//     segments.segments.push_back(segment);
-//     return segments;
-// }
-
-// std::vector<std::vector<double>> ArmController::planSafePath(const std::vector<double>& targetPose) {
-//     // 伪代码：实际应接入 RRT*/A* 等避障算法
-//     return {targetPose};
-// }
+/**
+ * @brief 改变机械臂模式（如切换到手动/自动等）
+ * @param mode 目标模式（参考c2::UserCommand）
+ * @return true表示切换成功，false表示失败
+ */
+bool ArmController::changeRobotMode(c2::UserCommand mode) {
+    if (!api_) return false;
+    auto res = api_->sendUserCommand(mode);
+    if (res.code != c2::ResponseCode::OK) {
+        std::cerr << "changeRobotMode failed: " << res.msg << std::endl;
+        return false;
+    }
+    return true;
+}
 
 int main(int argc, char** argv) {
 
