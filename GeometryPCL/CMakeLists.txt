@@ -45,3 +45,7 @@ add_executable(PCLIncrementalFusion IcpFusion.cpp)
 target_compile_options(PCLIncrementalFusion PRIVATE /bigobj)
 # target_link_libraries(PCLIncrementalFusion ${PCL_LIBRARIES} Open3D::Open3D)
 target_link_libraries(PCLIncrementalFusion ${PCL_LIBRARIES})
+# 添加你的头文件目录（可选）
+target_include_directories(PCLIncrementalFusion PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
