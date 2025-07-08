@@ -1,4 +1,4 @@
-#include "icpFusion.hpp"
+#include "IcpFusion.hpp"
 
 
 using namespace std;
@@ -198,22 +198,27 @@ void pointcloud_to_mesh(PointCloudT::Ptr cloud, const std::string &save_path, fl
     std::cout << "Saved mesh to: " << save_path << std::endl;
 }
 
-int main()
-{
-    pcl::PointCloud<pcl::PointXYZ>::Ptr source(new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::io::loadPLYFile<pcl::PointXYZ>("D:/Open3DDemo/ResultData/test6/1.ply", *source);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr target(new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::io::loadPLYFile<pcl::PointXYZ>("D:/Open3DDemo/ResultData/test6/2.ply", *target);
-    Eigen::Matrix4f init_transform;
-    init_transform << 0.947263, 0.294074, -0.127332, -15.6769,
-        -0.288639, 0.955579, 0.059639, -3.83944,
-        0.139214, -0.0197408, 0.990066, -13.6697,
-        0, 0, 0, 1;
-    pcl::PointCloud<pcl::PointXYZ>::Ptr aligned = icppair_with_init(source, target, init_transform, 0.06f, true);
-    pointcloud_to_mesh(aligned, "D:/Open3DDemo/ResultData/test6/aligned_result_mesh.ply", 0.06f);
-    std::cout << "Saved aligned point cloud: D:/Open3DDemo/ResultData/test6/aligned_result.ply" << std::endl;
-    return 0;
-}
+// int main()
+// {
+//     pcl::PointCloud<pcl::PointXYZ>::Ptr source(new pcl::PointCloud<pcl::PointXYZ>);
+//     pcl::io::loadPLYFile<pcl::PointXYZ>("D:/Open3DDemo/ResultData/test6/1.ply", *source);
+//     pcl::PointCloud<pcl::PointXYZ>::Ptr target(new pcl::PointCloud<pcl::PointXYZ>);
+//     pcl::io::loadPLYFile<pcl::PointXYZ>("D:/Open3DDemo/ResultData/test6/2.ply", *target);
+//     Eigen::Matrix4f init_transform;
+//     init_transform << 0.947263, 0.294074, -0.127332, -15.6769,
+//         -0.288639, 0.955579, 0.059639, -3.83944,
+//         0.139214, -0.0197408, 0.990066, -13.6697,
+//         0, 0, 0, 1;
+//     // pcl::PointCloud<pcl::PointXYZ>::Ptr aligned = icppair_with_init(source, target, init_transform, 0.06f, true);
+//     pcl::PointCloud<pcl::PointXYZ>::Ptr aligned = icppair(source, target, 0.66f, true);
+//     // pcl::PointCloud<pcl::PointXYZ>::Ptr loadtest(new pcl::PointCloud<pcl::PointXYZ>);
+//     // pcl::io::loadPLYFile<pcl::PointXYZ>("D:/Open3DDemo/ResultData/Mergeed.ply", *loadtest);
+
+
+//     pointcloud_to_mesh(aligned, "D:/Open3DDemo/ResultData/test6/aligned_result_meshtest.ply", 0.96f);
+//     // std::cout << "Saved aligned point cloud: D:/Open3DDemo/ResultData/test6/aligned_result.ply" << std::endl;
+//     return 0;
+// }
 
 
 
