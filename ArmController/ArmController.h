@@ -62,16 +62,16 @@ public:
      * @param segments 关节空间轨迹段集合
      * @return true表示执行成功，false表示失败
      */
-    bool executeTrajectory(const c2::MovJointSegments& segments);
+    bool StartBrushTeethTrajectoryJoint(const c2::MovJointSegments& segments);
 
     /**
      * @brief 从yaml文件生成关节空间轨迹
      * @param yaml_path yaml文件路径
-     * @param speed 关节运动速度（度/秒）
-     * @param acc 关节运动加速度（度/秒^2）
+     * @param speed 关节运动速度（c2::Speed类型）
+     * @param acc 关节运动加速度（c2::Acc类型）
      * @return 生成的关节空间轨迹段集合
      */
-    c2::MovJointSegments parseYamlToMovJointSegments(const std::string& yaml_path, double speed = 60, double acc = 80);
+    c2::MovJointSegments parseYamlToMovJointSegments(const std::string& yaml_path, const c2::Speed& speed, const c2::Acc& acc);
 
     /**
      * @brief 设置Home位置（关节角度）
@@ -83,20 +83,20 @@ public:
     /**
      * @brief 根据点云和法向量生成笛卡尔空间轨迹
      * @param cloud 点云（已在机械臂坐标系下）
-     * @param ids 轨迹点在点云中的索引
-     * @param speed 末端线速度（mm/s）
-     * @param acc 末端线加速度（mm/s^2）
+     * @param ids 轨迹点在点云中的索引（每28个点分为一组）
+     * @param speed 末端线速度（c2::Speed类型）
+     * @param acc 末端线加速度（c2::Acc类型）
      * @param extend_dist 沿法向量延伸距离（米），默认0.05m
-     * @return 生成的笛卡尔空间轨迹段集合
+     * @return 按顺序分组的笛卡尔空间轨迹段集合vector
      */
-    c2::MovCartSegments createCartTrajectoryFromPointCloud(const open3d::geometry::PointCloud& cloud, const std::vector<int>& ids, double speed = 60, double acc = 80, double extend_dist = 0.05);
+    std::vector<c2::MovCartSegments> createCartTrajectoryFromPointCloud(const open3d::geometry::PointCloud& cloud, const std::vector<int>& ids, const c2::Speed& speed, const c2::Acc& acc, double extend_dist = 0.05);
 
     /**
      * @brief 按照生成的MovCartSegments轨迹来运动
      * @param traj 笛卡尔空间轨迹段集合
      * @return true表示执行成功，false表示失败
      */
-    bool StartBrushTeethTrajectory(const c2::MovCartSegments& traj);
+    bool StartBrushTeethTrajectoryCart(const c2::MovCartSegments& traj);
 
     /**
      * @brief 执行指定的project

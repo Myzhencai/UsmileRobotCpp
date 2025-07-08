@@ -6,6 +6,10 @@
 #include <open3d/Open3D.h>
 #include <Eigen/Dense>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 // 将弧度转为角度
 constexpr double RAD2DEG = 180.0 / M_PI;
 
@@ -148,7 +152,7 @@ bool ArmController::isGripperOpen(int port) const {
  * @param segments 需要执行的笛卡尔轨迹段集合
  * @return 操作是否成功
  */
-bool ArmController::executeTrajectory(const c2::MovJointSegments& segments) {
+bool ArmController::StartBrushTeethTrajectoryJoint(const c2::MovJointSegments& segments) {
     if (!api_) {
         std::cerr << "api_ is not initialized." << std::endl;
         return false;
@@ -196,11 +200,11 @@ bool ArmController::setHomePosition(const std::vector<double>& position) {
  * 并将其转换为MovJointSegments结构体，用于机械臂的关节空间运动轨迹规划。
  *
  * @param yaml_path yaml文件路径，文件中应包含"Points"字段，每个点为6维关节角度
- * @param speed 关节运动速度（单位：度/秒），默认为60
- * @param acc 关节运动加速度（单位：度/秒^2），默认为80
+ * @param speed 关节运动速度（单位：度/秒）
+ * @param acc 关节运动加速度（单位：度/秒^2）
  * @return 生成的MovJointSegments轨迹段集合
  */
-c2::MovJointSegments ArmController::parseYamlToMovJointSegments(const std::string& yaml_path, double speed = 60, double acc = 80) {
+c2::MovJointSegments ArmController::parseYamlToMovJointSegments(const std::string& yaml_path, const c2::Speed& speed, const c2::Acc& acc) {
     c2::MovJointSegments segments;
     try {
         YAML::Node root = YAML::LoadFile(yaml_path);
@@ -214,13 +218,10 @@ c2::MovJointSegments ArmController::parseYamlToMovJointSegments(const std::strin
                 c2::Point p;
                 p.type = c2::PointType::Joint;
                 for (size_t i = 0; i < 6; ++i) {
-                    // 是否需要切换单位存疑需要和那边确认（需要换算成角度）
                     p.apos.jntPos[i] = point["apos"][i].as<double>() * RAD2DEG;
                 }
-                c2::Speed s; s.joint = speed;
-                c2::Acc a; a.joint = acc;
                 c2::Zone z; z.per = 50; z.dis = 60;
-                segments.AddMovJ(p, s, a, c2::ZoneType::Relative, z);
+                segments.AddMovJ(p, speed, acc, c2::ZoneType::Relative, z);
             }
         }
     } catch (const std::exception& e) {
@@ -238,15 +239,17 @@ c2::MovJointSegments ArmController::parseYamlToMovJointSegments(const std::strin
  * 它首先遍历指定的点索引（ids），对于每个点，计算其扩展后的新位置，
  * 然后构造一个MovL（直线插补）类型的轨迹段，并添加到轨迹集合中。
  */
-c2::MovCartSegments ArmController::createCartTrajectoryFromPointCloud(
+std::vector<c2::MovCartSegments> ArmController::createCartTrajectoryFromPointCloud(
     const open3d::geometry::PointCloud& cloud,
     const std::vector<int>& ids,
     const c2::Speed& speed,
     const c2::Acc& acc,
-    double extend_dist
-) {
-    c2::MovCartSegments traj;
+    double extend_dist)
+{
+    std::vector<c2::MovCartSegments> traj_vec;
     c2::Zone z; z.per = 0; z.dis = 0;
+    size_t count = 0;
+    c2::MovCartSegments traj;
     for (int idx : ids) {
         if (idx < 0 || idx >= static_cast<int>(cloud.points_.size()) || idx >= static_cast<int>(cloud.normals_.size())) continue;
         const auto& pt = cloud.points_[idx];
@@ -285,11 +288,20 @@ c2::MovCartSegments ArmController::createCartTrajectoryFromPointCloud(
         cpos.cpos.c = euler[0]; // Z
 
         traj.AddMovL(cpos, speed, acc, c2::ZoneType::Fine, z);
+        ++count;
+        if (count == 28) {
+            traj_vec.push_back(traj);
+            traj = c2::MovCartSegments();
+            count = 0;
+        }
     }
-    return traj;
+    if (count > 0) {
+        traj_vec.push_back(traj);
+    }
+    return traj_vec;
 }
 
-bool ArmController::StartBrushTeethTrajectory(const c2::MovCartSegments& traj) {
+bool ArmController::StartBrushTeethTrajectoryCart(const c2::MovCartSegments& traj) {
     if (!api_) {
         std::cerr << "api_ is not initialized." << std::endl;
         return false;
@@ -344,7 +356,23 @@ bool ArmController::getCartPosition(c2::CPos& out_pose) {
         std::cerr << "getCartPosition failed: " << res.msg << std::endl;
         return false;
     }
-    out_pose = res.data.get<c2::CPos>();
+    // res.data 是一个 double 数组，顺序为 x, y, z, a, b, c
+    try {
+        auto arr = res.data;
+        if (!arr.is_array() || arr.size() < 6) {
+            std::cerr << "getCartPosition: data is not a valid array." << std::endl;
+            return false;
+        }
+        out_pose.x = arr[0].get<double>();
+        out_pose.y = arr[1].get<double>();
+        out_pose.z = arr[2].get<double>();
+        out_pose.a = arr[3].get<double>();
+        out_pose.b = arr[4].get<double>();
+        out_pose.c = arr[5].get<double>();
+    } catch (const std::exception& e) {
+        std::cerr << "getCartPosition: parse error: " << e.what() << std::endl;
+        return false;
+    }
     return true;
 }
 
@@ -363,14 +391,14 @@ bool ArmController::changeRobotMode(c2::UserCommand mode) {
     return true;
 }
 
-int main(int argc, char** argv) {
+// int main(int argc, char** argv) {
 
-    const std::string ip = "192.168.101.100";
-    const std::string port="9000";
+//     const std::string ip = "192.168.101.100";
+//     const std::string port="9000";
 
-    ArmController arm_controller(ip,port);
+//     ArmController arm_controller(ip,port);
 
 
-    return 0;
-}
+//     return 0;
+// }
 
