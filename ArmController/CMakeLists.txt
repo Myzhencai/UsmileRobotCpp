@@ -35,13 +35,13 @@ link_directories(${Open3D_LIBRARY_DIRS})
 #     ArmController.cpp
 # )
 
-add_library(ArmController STATIC
-    ArmController.cpp
-)
+# add_library(ArmController STATIC
+#     ArmController.cpp
+# )
 # End of Selection
 
-# add_executable(ArmController 
-#     ArmController.cpp)
+add_executable(ArmController 
+    ArmController.cpp)
 
 # 添加依赖的头文件
 target_include_directories(ArmController PUBLIC
@@ -52,6 +52,8 @@ target_include_directories(ArmController PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}
 )
+
+
 
 message("CMAKE_CURRENT_SOURCE_DIR: ${CMAKE_CURRENT_SOURCE_DIR}")
 message("CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")

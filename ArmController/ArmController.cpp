@@ -301,6 +301,107 @@ std::vector<c2::MovCartSegments> ArmController::createCartTrajectoryFromPointClo
     return traj_vec;
 }
 
+/**
+ * @brief 根据点云和法向量生成关节空间轨迹，考虑工具标定参数
+ * @param cloud 点云（已在机械臂坐标系下）
+ * @param ids 轨迹点在点云中的索引（每28个点分为一组）
+ * @param speed 关节运动速度（c2::Speed类型）
+ * @param acc 关节运动加速度（c2::Acc类型）
+ * @param tool_calibration 工具标定参数（x, y, z, roll, pitch, yaw），默认全为0
+ * @param extend_dist 沿法向量延伸距离（米），默认0.05m
+ * @return 按顺序分组的关节空间轨迹段集合vector
+ */
+std::vector<c2::MovJointSegments> ArmController::createJointTrajectoryFromPointCloud(
+    const open3d::geometry::PointCloud& cloud,
+    const std::vector<int>& ids,
+    const c2::Speed& speed,
+    const c2::Acc& acc,
+    const std::vector<double>& tool_calibration,
+    double extend_dist)
+{
+    std::vector<c2::MovJointSegments> traj_vec;
+    c2::Zone z; z.per = 0; z.dis = 0;
+    size_t count = 0;
+    c2::MovJointSegments traj;
+    
+    // Check tool calibration vector size
+    if (tool_calibration.size() != 6) {
+        std::cerr << "[createJointTrajectoryFromPointCloud] Tool calibration vector must have 6 elements. Using default values." << std::endl;
+    }
+    
+    for (int idx : ids) {
+        if (idx < 0 || idx >= static_cast<int>(cloud.points_.size()) || idx >= static_cast<int>(cloud.normals_.size())) continue;
+        
+        const auto& pt = cloud.points_[idx];
+        const auto& n = cloud.normals_[idx];
+        Eigen::Vector3d new_pt = pt + n.normalized() * extend_dist;
+        
+        // Apply tool calibration offset to Cartesian coordinates
+        Eigen::Vector3d calibrated_pt = new_pt;
+        if (tool_calibration.size() >= 3) {
+            calibrated_pt.x() -= tool_calibration[0];
+            calibrated_pt.y() -= tool_calibration[1];
+            calibrated_pt.z() -= tool_calibration[2];
+        }
+        
+        // Calculate orientation: normal vector aligned with z-axis（这里需要存疑，可能直接剪掉就可以了今天去看看）
+        Eigen::Vector3d z_axis = n.normalized();
+        Eigen::Vector3d x_ref(1, 0, 0);
+        Eigen::Vector3d y_axis = z_axis.cross(x_ref);
+        if (y_axis.norm() < 1e-6) {
+            x_ref = Eigen::Vector3d(0, 1, 0);
+            y_axis = z_axis.cross(x_ref);
+        }
+        y_axis.normalize();
+        Eigen::Vector3d x_axis = y_axis.cross(z_axis);
+        x_axis.normalize();
+        
+        // Construct rotation matrix
+        Eigen::Matrix3d rot;
+        rot.col(0) = x_axis;
+        rot.col(1) = y_axis;
+        rot.col(2) = z_axis;
+        
+        // Apply tool calibration rotation if available
+        if (tool_calibration.size() >= 6) {
+            double rx = tool_calibration[3], ry = tool_calibration[4], rz = tool_calibration[5];
+            Eigen::AngleAxisd Rz(rz, Eigen::Vector3d::UnitZ());
+            Eigen::AngleAxisd Ry(ry, Eigen::Vector3d::UnitY());
+            Eigen::AngleAxisd Rx(rx, Eigen::Vector3d::UnitX());
+            Eigen::Matrix3d tool_rot = (Rz * Ry * Rx).toRotationMatrix();
+            rot = rot * tool_rot;
+        }
+        
+        // Extract Euler angles (ZYX order, in radians)
+        Eigen::Vector3d euler = rot.eulerAngles(2, 1, 0); // ZYX
+        
+        // Create Cartesian position for inverse kinematics
+        c2::Point cpos;
+        cpos.type = c2::PointType::Cart;
+        cpos.cpos.x = calibrated_pt.x();
+        cpos.cpos.y = calibrated_pt.y();
+        cpos.cpos.z = calibrated_pt.z();
+        cpos.cpos.a = euler[2]; // X
+        cpos.cpos.b = euler[1]; // Y
+        cpos.cpos.c = euler[0]; // Z
+
+        // 直接传入笛卡尔点，无需手动转换为关节空间
+        traj.AddMovJ(cpos, speed, acc, c2::ZoneType::Fine, z);
+        ++count;
+        if (count == 28) {
+            traj_vec.push_back(traj);
+            traj = c2::MovJointSegments();
+            count = 0;
+        }
+    }
+    
+    if (count > 0) {
+        traj_vec.push_back(traj);
+    }
+    
+    return traj_vec;
+}
+
 bool ArmController::StartBrushTeethTrajectoryCart(const c2::MovCartSegments& traj) {
     if (!api_) {
         std::cerr << "api_ is not initialized." << std::endl;
@@ -391,14 +492,153 @@ bool ArmController::changeRobotMode(c2::UserCommand mode) {
     return true;
 }
 
-// int main(int argc, char** argv) {
+std::vector<double> ArmController::ToolsCalibration() {
+    std::vector<c2::CPos> poses;
+    std::vector<double> result(6, 0.0);
+    // 1. Switch to manual mode
+    if (!changeRobotMode(c2::UserCommand::ToReady)) {
+        std::cerr << "[ToolsCalibration] Failed to switch to Manual mode." << std::endl;
+        return result;
+    }
+    std::cout << "[ToolsCalibration] Entering manual mode. Please move the robot arm to 4 different calibration points. After each move, press Enter to record the pose." << std::endl;
+    for (int i = 0; i < 4; ++i) {
+        // 需要避免某个位置重复采样
+        std::cout << "Move the robot arm to calibration point " << (i+1) << " and press Enter..." << std::endl;
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        c2::CPos pose;
+        if (!getCartPosition(pose)) {
+            std::cerr << "[ToolsCalibration] Failed to get pose for point " << (i+1) << "." << std::endl;
+            continue;
+        }
+        poses.push_back(pose);
+        std::cout << "Recorded pose: x=" << pose.x << ", y=" << pose.y << ", z=" << pose.z
+                  << ", a=" << pose.a << ", b=" << pose.b << ", c=" << pose.c << std::endl;
+    }
+    if (poses.size() < 4) {
+        std::cerr << "[ToolsCalibration] Less than 4 calibration points recorded. Returning zero vector." << std::endl;
+        return result;
+    }
+    // Simple processing: use the mean of the 4 points as the calibration result
+    // 使用四点法估算 TCP 在法兰坐标系下的位置
+    // 1. 将 poses 转换为 4x4 齐次变换矩阵
+    std::vector<Eigen::Matrix4d> T_list;
+    for (const auto& p : poses) {
+        // p.a, p.b, p.c 是 ZYX 欧拉角，单位为弧度
+        double rx = p.a, ry = p.b, rz = p.c;
+        // 构造旋转矩阵（ZYX顺序）
+        Eigen::AngleAxisd Rz(rz, Eigen::Vector3d::UnitZ());
+        Eigen::AngleAxisd Ry(ry, Eigen::Vector3d::UnitY());
+        Eigen::AngleAxisd Rx(rx, Eigen::Vector3d::UnitX());
+        Eigen::Matrix3d R = (Rz * Ry * Rx).toRotationMatrix();
+        Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+        T.block<3,3>(0,0) = R;
+        T.block<3,1>(0,3) = Eigen::Vector3d(p.x, p.y, p.z);
+        T_list.push_back(T);
+    }
+    // 2. 构造 A, b
+    const Eigen::Matrix3d& R0 = T_list[0].block<3,3>(0,0);
+    const Eigen::Vector3d& p0 = T_list[0].block<3,1>(0,3);
+    Eigen::MatrixXd A(3 * (T_list.size() - 1), 3);
+    Eigen::VectorXd b(3 * (T_list.size() - 1));
+    for (size_t i = 1; i < T_list.size(); ++i) {
+        const Eigen::Matrix3d& Ri = T_list[i].block<3,3>(0,0);
+        const Eigen::Vector3d& pi = T_list[i].block<3,1>(0,3);
+        A.block<3,3>(3*(i-1), 0) = Ri - R0;
+        b.segment<3>(3*(i-1)) = p0 - pi;
+    }
+    // 3. 最小二乘求解
+    Eigen::Vector3d tcp_pos = A.colPivHouseholderQr().solve(b);
+    result[0] = tcp_pos(0);
+    result[1] = tcp_pos(1);
+    result[2] = tcp_pos(2);
+    std::cout << "[ToolsCalibration] Calibration result (TCP in flange frame): x=" << result[0]
+              << ", y=" << result[1] << ", z=" << result[2] << std::endl;
 
-//     const std::string ip = "192.168.101.100";
-//     const std::string port="9000";
 
-//     ArmController arm_controller(ip,port);
+    // 旋转标定
+    std::cout << "[ToolsCalibration] Please manually rotate the robot tool so that the polar coordinates are aligned as desired, then press Enter to continue..." << std::endl;
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Wait for user to press Enter
 
+    c2::CPos rot_pose;
+    if (!getCartPosition(rot_pose)) {
+        std::cerr << "[ToolsCalibration] Failed to get pose for rotation calibration, setting last 3 values to 0." << std::endl;
+        result[3] = 0;
+        result[4] = 0;
+        result[5] = 0;
+    } else {
+        result[3] = rot_pose.a;
+        result[4] = rot_pose.b;
+        result[5] = rot_pose.c;
+        std::cout << "[ToolsCalibration] Recorded rotation calibration: a=" << result[3]
+                  << ", b=" << result[4] << ", c=" << result[5] << std::endl;
+    }
+    return result;
+}
 
-//     return 0;
-// }
+int main() {
+    ArmController arm; // 不传递参数，直接用默认值
+
+    // 工具标定功能（可以控制开关）
+    arm.ToolsCalibration();
+
+    // 1. isconnected
+    std::cout << "isconnected: " << arm.isconnected() << std::endl;
+
+    // // 2. openGripper/closeGripper/isGripperOpen
+    // std::cout << "openGripper: " << arm.openGripper() << std::endl;
+    // std::cout << "isGripperOpen: " << arm.isGripperOpen() << std::endl;
+    // std::cout << "closeGripper: " << arm.closeGripper() << std::endl;
+    // std::cout << "isGripperOpen: " << arm.isGripperOpen() << std::endl;
+
+    // // 3. setHomePosition
+    // std::vector<double> home_pos = {0, 0, 0, 0, 0, 0};
+    // std::cout << "setHomePosition: " << arm.setHomePosition(home_pos) << std::endl;
+
+    // // 4. getRobotState
+    // int state = arm.getRobotState();
+    // std::cout << "getRobotState: " << state << std::endl;
+
+    // // 5. getCartPosition
+    // c2::CPos pose;
+    // bool cart_ok = arm.getCartPosition(pose);
+    // std::cout << "getCartPosition: " << cart_ok;
+    // if (cart_ok) {
+    //     std::cout << " (x=" << pose.x << ", y=" << pose.y << ", z=" << pose.z
+    //               << ", a=" << pose.a << ", b=" << pose.b << ", c=" << pose.c << ")";
+    // }
+    // std::cout << std::endl;
+
+    // // 6. changeRobotMode
+    // std::cout << "changeRobotMode: " << arm.changeRobotMode(c2::UserCommand::Auto) << std::endl;
+
+    // // 7. runProject
+    // std::cout << "runProject: " << arm.runProject("TestProject", "TestTask") << std::endl;
+
+    // // 8. parseYamlToMovJointSegments
+    // c2::Speed speed; speed.jnt = {10,10,10,10,10,10};
+    // c2::Acc acc; acc.jnt = {10,10,10,10,10,10};
+    // c2::MovJointSegments segs = arm.parseYamlToMovJointSegments("test.yaml", speed, acc);
+    // std::cout << "parseYamlToMovJointSegments: " << (segs.size() > 0) << std::endl;
+
+    // // 9. StartBrushTeethTrajectoryJoint
+    // std::cout << "StartBrushTeethTrajectoryJoint: " << arm.StartBrushTeethTrajectoryJoint(segs) << std::endl;
+
+    // // 10. createCartTrajectoryFromPointCloud
+    // open3d::geometry::PointCloud cloud;
+    // cloud.points_.push_back(Eigen::Vector3d(0,0,0));
+    // cloud.points_.push_back(Eigen::Vector3d(0,0,1));
+    // std::vector<int> ids = {0,1};
+    // std::vector<c2::MovCartSegments> cart_trajs = arm.createCartTrajectoryFromPointCloud(cloud, ids, speed, acc, 0.05);
+    // std::cout << "createCartTrajectoryFromPointCloud: " << (cart_trajs.size() > 0) << std::endl;
+
+    // // 11. StartBrushTeethTrajectoryCart
+    // if (!cart_trajs.empty()) {
+    //     std::cout << "StartBrushTeethTrajectoryCart: " << arm.StartBrushTeethTrajectoryCart(cart_trajs[0]) << std::endl;
+    // }
+
+    // // 12. disconnect
+    // std::cout << "disconnect: " << arm.disconnect() << std::endl;
+
+    return 0;
+}
 

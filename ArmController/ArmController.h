@@ -9,7 +9,7 @@
 #include <open3d/Open3D.h>
 #include <Eigen/Dense>
 
-// 需要对机械臂设置安全区域避免出错
+// 需要对机械臂设置安全区域避免出错，点云坐标必须是在机械臂坐标系下，这样对应生成的轨迹也是机械臂坐标系的，工具与机械臂标定需要完成
 class ArmController {
 public:
     /**
@@ -92,6 +92,18 @@ public:
     std::vector<c2::MovCartSegments> createCartTrajectoryFromPointCloud(const open3d::geometry::PointCloud& cloud, const std::vector<int>& ids, const c2::Speed& speed, const c2::Acc& acc, double extend_dist = 0.05);
 
     /**
+     * @brief 根据点云和法向量生成关节空间轨迹，考虑工具标定参数
+     * @param cloud 点云（已在机械臂坐标系下）
+     * @param ids 轨迹点在点云中的索引（每28个点分为一组）
+     * @param speed 关节运动速度（c2::Speed类型）
+     * @param acc 关节运动加速度（c2::Acc类型）
+     * @param tool_calibration 工具标定参数（x, y, z, roll, pitch, yaw），默认全为0
+     * @param extend_dist 沿法向量延伸距离（米），默认0.05m
+     * @return 按顺序分组的关节空间轨迹段集合vector
+     */
+    std::vector<c2::MovJointSegments> createJointTrajectoryFromPointCloud(const open3d::geometry::PointCloud& cloud, const std::vector<int>& ids, const c2::Speed& speed, const c2::Acc& acc, const std::vector<double>& tool_calibration = {0,0,0,0,0,0}, double extend_dist = 0.05);
+
+    /**
      * @brief 按照生成的MovCartSegments轨迹来运动
      * @param traj 笛卡尔空间轨迹段集合
      * @return true表示执行成功，false表示失败
@@ -125,6 +137,12 @@ public:
      * @return true表示切换成功，false表示失败
      */
     bool changeRobotMode(c2::UserCommand mode);
+
+    /**
+     * @brief 工具标定函数，交互式采集4组末端位姿，返回6维向量（x, y, z, roll, pitch, yaw）
+     * @return std::vector<double>，依次为x, y, z, roll, pitch, yaw
+     */
+    std::vector<double> ToolsCalibration();
 
 private:
     std::unique_ptr<c2::CodroidApi> api_;
