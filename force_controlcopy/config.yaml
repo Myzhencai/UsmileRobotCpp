@@ -1,0 +1,20 @@
+admittance_controller:
+  dt: 0.002
+  log_to_file: false
+  log_file_path: "./admittance_controller.log"
+  alert_overrun: false
+  compliance6d:
+    stiffness: [100, 100, 100, 1, 1, 1]
+    damping: [2, 2, 2, 0.2, 0.2, 0.2]
+    inertia: [5, 5, 5, 0.005, 0.005, 0.005]
+    stiction: [0, 0, 0, 0, 0, 0]
+  max_spring_force_magnitude: 50
+  max_spring_torque_magnitude: 4
+  direct_force_control_gains:
+    P_trans: 0
+    I_trans: 0
+    D_trans: 0
+    P_rot: 0
+    I_rot: 0
+    D_rot: 0
+  direct_force_control_I_limit: [0, 0, 0, 0, 0, 0]
