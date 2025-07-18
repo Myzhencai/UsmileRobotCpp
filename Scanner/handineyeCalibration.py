@@ -206,25 +206,37 @@ def pose_to_homogeneous_matrix(pose):
     return H
 
 
-def transform_and_save_pointclouds(R_, t_, pose_list, ply_dir, save_suffix="_trans"):
+def transform_and_save_pointclouds(R_, t_, pose_list, ply_dir, save_suffix="_trans", z_min=180, z_max=230):
     # 获取ply文件并排序
     ply_files = [f for f in os.listdir(ply_dir) if f.endswith('.ply')]
     ply_files_sorted = sorted(ply_files, key=lambda x: int(os.path.splitext(x)[0].split('_')[-1]) if x.split('_')[-1].split('.')[0].isdigit() else -1)
     assert len(ply_files_sorted) == len(pose_list), "点云文件数与姿态数不一致！"
     pcds = [o3d.io.read_point_cloud(os.path.join(ply_dir, f)) for f in ply_files_sorted]
     for i, (pcd, pose) in enumerate(zip(pcds, pose_list)):
+        # 1. 直通滤波（z轴范围）
+        points = np.asarray(pcd.points)
+        mask = (points[:, 2] >= z_min) & (points[:, 2] <= z_max)
+        filtered_points = points[mask]
+        filtered_pcd = o3d.geometry.PointCloud()
+        filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
+        if pcd.has_colors():
+            colors = np.asarray(pcd.colors)
+            filtered_pcd.colors = o3d.utility.Vector3dVector(colors[mask])
+        # 2. 统计离群点滤波
+        filtered_pcd, ind = filtered_pcd.remove_statistical_outlier(nb_neighbors=16, std_ratio=2.0)
+        # 3. 变换到机械臂基坐标系
         H_tool = pose_to_homogeneous_matrix(pose)
         H_cam2tool = np.eye(4)
         H_cam2tool[:3, :3] = R_
         H_cam2tool[:3, 3] = t_.reshape(3)
         H_cam2base = H_tool @ H_cam2tool
-        points = np.asarray(pcd.points)
+        points = np.asarray(filtered_pcd.points)
         points_h = np.hstack([points, np.ones((points.shape[0], 1))])
         points_base = (H_cam2base @ points_h.T).T[:, :3]
         pcd_base = o3d.geometry.PointCloud()
         pcd_base.points = o3d.utility.Vector3dVector(points_base)
-        if pcd.has_colors():
-            pcd_base.colors = pcd.colors
+        if filtered_pcd.has_colors():
+            pcd_base.colors = filtered_pcd.colors
         if not pcd_base.has_colors():
             color = [1, 0, 0] if i == 0 else [0, 1, 0]
             pcd_base.paint_uniform_color(color)
@@ -235,7 +247,7 @@ def transform_and_save_pointclouds(R_, t_, pose_list, ply_dir, save_suffix="_tra
         save_path = os.path.join(folder, save_name)
         o3d.io.write_point_cloud(save_path, pcd_base)
         print(f"Transformed point cloud saved to: {save_path}")
-    print("所有点云已变换并保存。")
+    print("所有点云已滤波、变换并保存。")
 
 
 def main():
@@ -307,7 +319,7 @@ def main():
         ]
         # 点云批量变换与保存
         ply_dir = "D:/hand_eye_calibration/robotply/filterpointcloud"
-        transform_and_save_pointclouds(R_, t_, valid_poses, ply_dir, save_suffix="_trans")
+        transform_and_save_pointclouds(R_, t_, valid_poses, ply_dir, save_suffix="_trans", z_min=180, z_max=230)
     else:
         print('没有足够的有效样本进行手眼标定。')
 
